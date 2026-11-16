@@ -63,3 +63,7 @@ JSON
 echo
 echo "Готово: https://github.com/$ORG/$name"
 echo "CI уже запустився — подивитися: gh run watch -R $ORG/$name"
+echo
+echo "Після першої публікації образу зроби його публічним (одноразово):"
+echo "  https://github.com/orgs/$ORG/packages/container/$name/settings"
+echo "Інакше він піде у 500 МБ приватного сховища плану Free."
