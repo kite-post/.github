@@ -71,6 +71,11 @@ jobs:
     runs-on: ${{ inputs.runs-on }}
     permissions:
       contents: read
+      # Читання Maven-пакета ua.kite:kite-contracts із GitHub Packages.
+      packages: read
+    env:
+      MAVEN_USERNAME: ${{ github.actor }}
+      MAVEN_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v7
 
@@ -80,6 +85,11 @@ jobs:
           distribution: temurin
           java-version: ${{ inputs.java-version }}
           cache: maven
+          # settings.xml із сервером github: інакше kite-contracts не
+          # резолвиться, бо GitHub Packages віддає Maven лише з токеном.
+          server-id: github
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
 
       - name: Знайти Maven
         id: mvn
@@ -132,6 +142,27 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Збірка в Dockerfile сама тягне залежності, серед них kite-contracts із
+      # GitHub Packages. Токен їде секретом BuildKit, тож не лишається ні в
+      # шарах образу, ні в його історії.
+      - name: Підготувати settings.xml для збірки
+        id: m2
+        run: |
+          set -euo pipefail
+          file="$RUNNER_TEMP/settings.xml"
+          cat > "$file" <<XML
+          <settings>
+            <servers>
+              <server>
+                <id>github</id>
+                <username>${{ github.actor }}</username>
+                <password>${{ secrets.GITHUB_TOKEN }}</password>
+              </server>
+            </servers>
+          </settings>
+          XML
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+
       - name: Зібрати і опублікувати образ
         id: build
         uses: kite-post/.github/actions/build-image@main
@@ -140,6 +171,8 @@ jobs:
           dockerfile: ${{ inputs.dockerfile }}
           context: ${{ inputs.context }}
           push: ${{ inputs.publish && github.event_name != 'pull_request' }}
+          secret-files: |
+            m2settings=${{ steps.m2.outputs.file }}
 
   bump:
     name: Версія в kite-infra

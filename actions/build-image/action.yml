@@ -24,6 +24,13 @@ inputs:
     description: Аргументи збірки, по одному на рядок
     required: false
     default: ''
+  secret-files:
+    description: >-
+      Секрети BuildKit з файлів, по одному на рядок у вигляді id=шлях. Потрібні
+      збіркам, які тягнуть приватні залежності (наприклад Maven-пакет
+      kite-contracts із GitHub Packages). У шарах образу не лишаються.
+    required: false
+    default: ''
   platforms:
     description: Платформи збірки
     required: false
@@ -84,6 +91,7 @@ runs:
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
         build-args: ${{ inputs.build-args }}
+        secret-files: ${{ inputs.secret-files }}
         provenance: false
         cache-from: type=gha
         cache-to: type=gha,mode=max
