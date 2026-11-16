@@ -30,6 +30,12 @@ bash scripts/new-repo.sh kite-web         vue
 `rename.sh` (артефакт, пакет, ім'я образу), виставляє опис і вимикає зайве.
 Після нього CI уже біжить, і правити руками нічого не треба.
 
+Репозиторії створюються публічними. Причина прозаїчна: на плані Free приватні
+репозиторії мають 2000 хвилин Actions на місяць і 500 МБ сховища пакетів, а в
+нас 27 репозиторіїв, і кожен коміт у `main` публікує новий образ — один тільки
+Java-образ займає понад 300 МБ. Для публічних і хвилини, і сховище безлімітні.
+Закрити все: `VISIBILITY=private bash scripts/new-repo.sh …`.
+
 ## Як підключити пайплайн
 
 У репозиторії сервіса — один файл `.github/workflows/ci.yml`:
@@ -122,7 +128,7 @@ GitHub не вміє тримати шаблон репозиторію всер
 шаблони — окремі репозиторії з прапорцем «Template». Новий сервіс:
 
 ```bash
-gh repo create kite-post/shipment-service --private --template kite-post/template-java-service
+gh repo create kite-post/shipment-service --public --template kite-post/template-java-service
 cd shipment-service && make rename NAME=shipment-service
 ```
 

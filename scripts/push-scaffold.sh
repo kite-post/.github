@@ -11,12 +11,16 @@
 #
 #   ORG=kite-post bash .github/scripts/push-scaffold.sh
 #
+# Репозиторії публічні: на плані Free приватні дають лише 2000 хвилин Actions
+# на місяць і 500 МБ сховища пакетів, а 27 репозиторіїв з образами на кожен
+# коміт у це не влазять. Закрити все: VISIBILITY=private.
+#
 # Повторний запуск безпечний: наявні репозиторії не перестворюються, пушиться
 # лише те, що змінилося.
 set -euo pipefail
 
 ORG="${ORG:-kite-post}"
-VISIBILITY="${VISIBILITY:-private}"
+VISIBILITY="${VISIBILITY:-public}"
 
 command -v gh >/dev/null 2>&1 || { echo "Потрібен gh CLI." >&2; exit 1; }
 gh auth status >/dev/null 2>&1 || { echo "Спершу: gh auth login" >&2; exit 1; }

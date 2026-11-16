@@ -12,7 +12,7 @@ set -euo pipefail
 name="${1:-}"
 kind="${2:-}"
 ORG="${ORG:-kite-post}"
-VISIBILITY="${VISIBILITY:-private}"
+VISIBILITY="${VISIBILITY:-public}"
 
 if [ -z "$name" ] || [ -z "$kind" ]; then
   echo "Використання: $0 <ім'я-репозиторію> <java|go|python|vue>" >&2
@@ -49,7 +49,7 @@ gh repo edit "$ORG/$name" \
   --delete-branch-on-merge >/dev/null
 
 gh api -X PUT "repos/$ORG/$name/branches/main/protection" \
-  --input - >/dev/null 2>&1 <<'JSON' || echo "⚠ захист гілки не ввімкнувся (потрібен платний план для приватних репо)"
+  --input - >/dev/null 2>&1 <<'JSON' || echo "⚠ захист гілки не ввімкнувся — увімкни вручну в Settings → Branches"
 {
   "required_status_checks": null,
   "enforce_admins": false,
