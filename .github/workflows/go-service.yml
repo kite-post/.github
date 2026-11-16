@@ -35,6 +35,11 @@ on:
         type: boolean
         required: false
         default: true
+      main-branch:
+        description: Гілка, збірка з якої вважається деплоєм на стенд
+        type: string
+        required: false
+        default: main
       runs-on:
         type: string
         required: false
@@ -56,10 +61,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Поставити Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ inputs.go-version != '' && inputs.go-version || '' }}
           go-version-file: ${{ inputs.go-version == '' && 'go.mod' || '' }}
@@ -82,9 +87,9 @@ jobs:
           fi
 
       - name: Лінт (golangci-lint)
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v1.64.8
+          version: v2.15.0
 
       - name: go vet
         run: go vet ./...
@@ -109,7 +114,7 @@ jobs:
 
       - name: Зберегти покриття
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-${{ env.SERVICE }}
           path: coverage.out
@@ -126,7 +131,7 @@ jobs:
     outputs:
       tag: ${{ steps.build.outputs.primary-tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Зібрати і опублікувати образ
         id: build
         uses: kite-post/.github/actions/build-image@main
@@ -142,7 +147,7 @@ jobs:
     if: >-
       inputs.bump-infra && inputs.publish
       && github.event_name != 'pull_request'
-      && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      && (github.ref == format('refs/heads/{0}', inputs.main-branch)
           || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ${{ inputs.runs-on }}
     permissions:

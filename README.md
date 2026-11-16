@@ -102,6 +102,7 @@ jobs:
 | `publish`           | `true`             | Вимкнути публікацію образу (бібліотеки, прототипи)    |
 | `integration-tests` | `true`             | Вимкнути важкі тести з Testcontainers                 |
 | `bump-infra`        | `true`             | Не чіпати `versions.env` у `kite-infra`               |
+| `main-branch`       | `main`             | Гілка, збірка з якої вважається деплоєм на стенд      |
 | `runs-on`           | `ubuntu-latest`    | Свій раннер                                           |
 
 ## Секрети організації

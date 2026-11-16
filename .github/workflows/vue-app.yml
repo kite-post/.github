@@ -38,6 +38,11 @@ on:
         type: boolean
         required: false
         default: true
+      main-branch:
+        description: Гілка, збірка з якої вважається деплоєм на стенд
+        type: string
+        required: false
+        default: main
       runs-on:
         type: string
         required: false
@@ -63,16 +68,16 @@ jobs:
       contents: read
       packages: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Поставити pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           # Версія береться з поля packageManager у package.json.
           run_install: false
 
       - name: Поставити Node ${{ inputs.node-version }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
           cache: pnpm
@@ -101,7 +106,7 @@ jobs:
         run: pnpm run build
 
       - name: Зберегти dist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist-${{ env.APP }}
           path: dist
@@ -118,7 +123,7 @@ jobs:
     outputs:
       tag: ${{ steps.build.outputs.primary-tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Зібрати і опублікувати образ
         id: build
         uses: kite-post/.github/actions/build-image@main
@@ -134,7 +139,7 @@ jobs:
     if: >-
       inputs.bump-infra && inputs.publish
       && github.event_name != 'pull_request'
-      && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      && (github.ref == format('refs/heads/{0}', inputs.main-branch)
           || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ${{ inputs.runs-on }}
     permissions:
