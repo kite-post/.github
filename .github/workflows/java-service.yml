@@ -1,0 +1,155 @@
+name: Java-сервіс
+
+# Спільний пайплайн для 12 Java-сервісів Kite (5.6).
+# Викликається з репозиторію сервіса:
+#
+#   jobs:
+#     ci:
+#       uses: kite-post/.github/.github/workflows/java-service.yml@main
+#       permissions: { contents: read, packages: write }
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        description: Ім'я сервіса; воно ж ім'я образу. Типово — ім'я репозиторію.
+        type: string
+        required: false
+        default: ''
+      java-version:
+        type: string
+        required: false
+        default: '21'
+      dockerfile:
+        type: string
+        required: false
+        default: Dockerfile
+      context:
+        type: string
+        required: false
+        default: .
+      publish:
+        description: Публікувати образ у GHCR (на pull request не публікується ніколи)
+        type: boolean
+        required: false
+        default: true
+      integration-tests:
+        description: Запускати інтеграційні тести (Testcontainers)
+        type: boolean
+        required: false
+        default: true
+      bump-infra:
+        description: Після публікації відкрити PR з новою версією в kite-infra
+        type: boolean
+        required: false
+        default: true
+      runs-on:
+        type: string
+        required: false
+        default: ubuntu-latest
+    secrets:
+      INFRA_BUMP_TOKEN:
+        description: Токен з доступом на запись у kite-infra
+        required: false
+    outputs:
+      image-tag:
+        description: Тег опублікованого образу
+        value: ${{ jobs.image.outputs.tag }}
+
+env:
+  SERVICE: ${{ inputs.service-name != '' && inputs.service-name || github.event.repository.name }}
+
+jobs:
+  verify:
+    name: Лінт і тести
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Поставити JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+          cache: maven
+
+      - name: Знайти Maven
+        id: mvn
+        run: |
+          set -euo pipefail
+          if [ -x ./mvnw ]; then echo "cmd=./mvnw" >> "$GITHUB_OUTPUT"; else echo "cmd=mvn" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Лінт (Spotless)
+        run: ${{ steps.mvn.outputs.cmd }} -B -ntp spotless:check
+
+      - name: Схеми kite-contracts
+        run: |
+          set -euo pipefail
+          if [ -f Makefile ] && grep -qE '^contracts-check:' Makefile; then
+            make contracts-check
+          else
+            echo "::notice::Цілі contracts-check немає — перевірку схем пропускаю."
+          fi
+
+      - name: Тести
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.integration-tests }}" = "true" ]; then
+            # verify проганяє і юніт-, і інтеграційні тести (Failsafe + Testcontainers)
+            ${{ steps.mvn.outputs.cmd }} -B -ntp verify
+          else
+            ${{ steps.mvn.outputs.cmd }} -B -ntp test
+          fi
+
+      - name: Зберегти звіти тестів
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ env.SERVICE }}
+          path: |
+            **/target/surefire-reports/**
+            **/target/failsafe-reports/**
+          if-no-files-found: ignore
+          retention-days: 7
+
+  image:
+    name: Образ
+    needs: verify
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.build.outputs.primary-tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Зібрати і опублікувати образ
+        id: build
+        uses: kite-post/.github/actions/build-image@main
+        with:
+          image-name: ${{ env.SERVICE }}
+          dockerfile: ${{ inputs.dockerfile }}
+          context: ${{ inputs.context }}
+          push: ${{ inputs.publish && github.event_name != 'pull_request' }}
+
+  bump:
+    name: Версія в kite-infra
+    needs: image
+    if: >-
+      inputs.bump-infra && inputs.publish
+      && github.event_name != 'pull_request'
+      && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+          || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+    steps:
+      - uses: kite-post/.github/actions/bump-infra-version@main
+        with:
+          service: ${{ inputs.service-name != '' && inputs.service-name || github.event.repository.name }}
+          tag: ${{ needs.image.outputs.tag }}
+          token: ${{ secrets.INFRA_BUMP_TOKEN }}

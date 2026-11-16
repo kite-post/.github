@@ -1,0 +1,7 @@
+{
+  "name": "Kite · Python-сервіс",
+  "description": "ruff, mypy, pytest, образ у GHCR, PR з версією в kite-infra.",
+  "iconName": "example-icon",
+  "categories": ["Python"],
+  "filePatterns": ["pyproject\\.toml$"]
+}

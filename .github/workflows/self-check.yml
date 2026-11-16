@@ -1,0 +1,21 @@
+name: Перевірка спільних workflow
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Перевірити YAML і вирази в workflow
+        uses: docker://rhysd/actionlint:latest
+        with:
+          args: -color -verbose

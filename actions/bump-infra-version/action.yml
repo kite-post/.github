@@ -1,0 +1,112 @@
+name: Підняти версію в kite-infra
+description: >-
+  Після публікації образу відкриває в репозиторії kite-infra pull request, який
+  піднімає рядок сервіса у versions.env. Мердж цього PR і є «деплоєм» на стенд
+  (12.6). Без токена з правом на запис у kite-infra крок тихо пропускається.
+
+inputs:
+  service:
+    description: Ім'я сервіса — ключ у versions.env
+    required: true
+  tag:
+    description: Новий тег образу (sha-… або v…)
+    required: true
+  infra-repo:
+    description: Репозиторій-оркестратор
+    required: false
+    default: ${{ github.repository_owner }}/kite-infra
+  versions-file:
+    description: Файл з версіями образів
+    required: false
+    default: versions.env
+  token:
+    description: Токен з правом contents:write і pull-requests:write у kite-infra
+    required: false
+    default: ''
+
+outputs:
+  pull-request:
+    description: Посилання на відкритий або оновлений PR
+    value: ${{ steps.bump.outputs.pull-request }}
+
+runs:
+  using: composite
+  steps:
+    - name: Відкрити PR з новою версією
+      id: bump
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        INFRA_REPO: ${{ inputs.infra-repo }}
+        VERSIONS_FILE: ${{ inputs.versions-file }}
+        SERVICE: ${{ inputs.service }}
+        TAG: ${{ inputs.tag }}
+        SOURCE_REPO: ${{ github.repository }}
+        SOURCE_SHA: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+
+        if [ -z "${GH_TOKEN:-}" ]; then
+          echo "::notice::Токен для kite-infra не заданий — версію не піднімаю."
+          echo "Додай секрет INFRA_BUMP_TOKEN в організації, щоб увімкнути автоматичний bump." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        # Ключ у versions.env: shipment-service -> SHIPMENT_SERVICE_TAG
+        key="$(printf '%s' "$SERVICE" | tr '[:lower:]-' '[:upper:]_')_TAG"
+        branch="bump/${SERVICE}-${TAG}"
+        work="$(mktemp -d)"
+
+        git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${INFRA_REPO}.git" "$work"
+        cd "$work"
+        git config user.name "kite-ci"
+        git config user.email "kite-ci@users.noreply.github.com"
+
+        if [ ! -f "$VERSIONS_FILE" ]; then
+          echo "::error::У ${INFRA_REPO} немає файлу ${VERSIONS_FILE}."
+          exit 1
+        fi
+
+        current="$(grep -E "^${key}=" "$VERSIONS_FILE" | head -1 | cut -d= -f2- || true)"
+        if [ "$current" = "$TAG" ]; then
+          echo "::notice::${key} вже дорівнює ${TAG} — PR не потрібен."
+          exit 0
+        fi
+
+        if [ -n "$current" ]; then
+          # Заміна наявного рядка; значення теж екранується, бо йде в заміну sed.
+          esc_tag="$(printf '%s' "$TAG" | sed -e 's/[&/\]/\\&/g')"
+          sed -i.bak -E "s|^${key}=.*|${key}=${esc_tag}|" "$VERSIONS_FILE"
+          rm -f "${VERSIONS_FILE}.bak"
+        else
+          printf '%s=%s\n' "$key" "$TAG" >> "$VERSIONS_FILE"
+        fi
+
+        git checkout -B "$branch"
+        git add "$VERSIONS_FILE"
+        git commit -m "Підняти ${SERVICE} до ${TAG}" \
+          -m "Джерело: ${SOURCE_REPO}@${SOURCE_SHA}"
+        git push --force origin "$branch"
+
+        existing="$(gh pr list --repo "$INFRA_REPO" --head "$branch" \
+          --state open --json url --jq '.[0].url' || true)"
+
+        if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+          url="$existing"
+          echo "PR уже відкритий: $url"
+        else
+          owner="${INFRA_REPO%%/*}"
+          body="$(
+            printf '%s\n\n%s\n' \
+              "Образ \`ghcr.io/${owner}/${SERVICE}:${TAG}\` опубліковано з ${SOURCE_REPO}@${SOURCE_SHA}." \
+              "Мердж цього PR = деплой сервіса на стенд. Було: \`${current:-—}\`, стає: \`${TAG}\`."
+          )"
+          url="$(gh pr create --repo "$INFRA_REPO" \
+            --head "$branch" \
+            --title "Підняти ${SERVICE} до ${TAG}" \
+            --body "$body")"
+          echo "PR створено: $url"
+        fi
+
+        echo "pull-request=$url" >> "$GITHUB_OUTPUT"
+        echo "Версія ${SERVICE} → \`${TAG}\`: $url" >> "$GITHUB_STEP_SUMMARY"

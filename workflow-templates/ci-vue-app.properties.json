@@ -1,0 +1,7 @@
+{
+  "name": "Kite · Vue-застосунок",
+  "description": "ESLint, vue-tsc, Vitest, збірка, образ з nginx у GHCR.",
+  "iconName": "example-icon",
+  "categories": ["JavaScript", "TypeScript"],
+  "filePatterns": ["vite\\.config\\.ts$"]
+}

@@ -1,0 +1,7 @@
+{
+  "name": "Kite · Java-сервіс",
+  "description": "Лінт, тести, образ у GHCR, PR з версією в kite-infra.",
+  "iconName": "example-icon",
+  "categories": ["Java"],
+  "filePatterns": ["pom\\.xml$"]
+}

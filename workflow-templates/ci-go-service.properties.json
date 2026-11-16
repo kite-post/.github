@@ -1,0 +1,7 @@
+{
+  "name": "Kite · Go-сервіс",
+  "description": "gofmt, golangci-lint, тести, образ у GHCR, PR з версією в kite-infra.",
+  "iconName": "example-icon",
+  "categories": ["Go"],
+  "filePatterns": ["go\\.mod$"]
+}

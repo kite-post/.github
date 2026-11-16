@@ -1,0 +1,31 @@
+name: Баг
+description: Щось працює не так, як описано в документації
+labels: [bug]
+body:
+  - type: input
+    id: service
+    attributes:
+      label: Сервіс
+      placeholder: shipment-service
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: Що сталося
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Як відтворити
+      placeholder: |
+        1. make up
+        2. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Що мало статися
+      description: Якщо є — посилання на розділ документації

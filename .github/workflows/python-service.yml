@@ -1,0 +1,156 @@
+name: Python-сервіс
+
+# Спільний пайплайн для ai-service і simulator (5.6).
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        type: string
+        required: false
+        default: ''
+      python-version:
+        type: string
+        required: false
+        default: '3.12'
+      dockerfile:
+        type: string
+        required: false
+        default: Dockerfile
+      context:
+        type: string
+        required: false
+        default: .
+      publish:
+        type: boolean
+        required: false
+        default: true
+      integration-tests:
+        type: boolean
+        required: false
+        default: true
+      type-check:
+        description: Проганяти mypy
+        type: boolean
+        required: false
+        default: true
+      bump-infra:
+        type: boolean
+        required: false
+        default: true
+      runs-on:
+        type: string
+        required: false
+        default: ubuntu-latest
+    secrets:
+      INFRA_BUMP_TOKEN:
+        required: false
+    outputs:
+      image-tag:
+        value: ${{ jobs.image.outputs.tag }}
+
+env:
+  SERVICE: ${{ inputs.service-name != '' && inputs.service-name || github.event.repository.name }}
+
+jobs:
+  verify:
+    name: Лінт і тести
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Поставити Python ${{ inputs.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: pip
+
+      - name: Поставити залежності
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          if [ -f pyproject.toml ]; then
+            pip install -e '.[dev]'
+          elif [ -f requirements-dev.txt ]; then
+            pip install -r requirements-dev.txt
+          else
+            echo "::error::Немає ні pyproject.toml, ні requirements-dev.txt."
+            exit 1
+          fi
+
+      - name: Лінт (ruff)
+        run: |
+          set -euo pipefail
+          ruff check .
+          ruff format --check .
+
+      - name: Типи (mypy)
+        if: inputs.type-check
+        run: mypy .
+
+      - name: Схеми kite-contracts
+        run: |
+          set -euo pipefail
+          if [ -f Makefile ] && grep -qE '^contracts-check:' Makefile; then
+            make contracts-check
+          else
+            echo "::notice::Цілі contracts-check немає — перевірку схем пропускаю."
+          fi
+
+      - name: Тести
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.integration-tests }}" = "true" ]; then
+            pytest -q --junitxml=test-results.xml
+          else
+            pytest -q -m 'not integration' --junitxml=test-results.xml
+          fi
+
+      - name: Зберегти звіти тестів
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ env.SERVICE }}
+          path: test-results.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
+  image:
+    name: Образ
+    needs: verify
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.build.outputs.primary-tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Зібрати і опублікувати образ
+        id: build
+        uses: kite-post/.github/actions/build-image@main
+        with:
+          image-name: ${{ env.SERVICE }}
+          dockerfile: ${{ inputs.dockerfile }}
+          context: ${{ inputs.context }}
+          push: ${{ inputs.publish && github.event_name != 'pull_request' }}
+
+  bump:
+    name: Версія в kite-infra
+    needs: image
+    if: >-
+      inputs.bump-infra && inputs.publish
+      && github.event_name != 'pull_request'
+      && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+          || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+    steps:
+      - uses: kite-post/.github/actions/bump-infra-version@main
+        with:
+          service: ${{ inputs.service-name != '' && inputs.service-name || github.event.repository.name }}
+          tag: ${{ needs.image.outputs.tag }}
+          token: ${{ secrets.INFRA_BUMP_TOKEN }}

@@ -1,0 +1,78 @@
+name: Дим-тест шаблонів
+
+# Створює тимчасовий репозиторій з шаблону, чекає на його CI і прибирає за собою.
+# Саме ця перевірка і є критерієм «новий репозиторій з шаблону проходить CI без правок».
+
+on:
+  workflow_dispatch:
+    inputs:
+      template:
+        description: Репозиторій-шаблон
+        type: choice
+        required: true
+        options:
+          - template-java-service
+          - template-go-service
+          - template-python-service
+          - template-vue-app
+      keep:
+        description: Не видаляти тимчасовий репозиторій після перевірки
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Створити репозиторій з шаблону і дочекатися CI
+        env:
+          GH_TOKEN: ${{ secrets.TEMPLATE_SMOKE_TOKEN }}
+          ORG: ${{ github.repository_owner }}
+          TEMPLATE: ${{ inputs.template }}
+          KEEP: ${{ inputs.keep }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::Потрібен секрет TEMPLATE_SMOKE_TOKEN (repo + delete_repo)."
+            exit 1
+          fi
+
+          name="smoke-${TEMPLATE}-$(date +%s)"
+          echo "Створюю ${ORG}/${name} з шаблону ${TEMPLATE}"
+          gh repo create "${ORG}/${name}" --private --template "${ORG}/${TEMPLATE}"
+
+          # shellcheck disable=SC2329  # викликається через trap
+          cleanup() {
+            if [ "$KEEP" != "true" ]; then
+              gh repo delete "${ORG}/${name}" --yes || true
+            fi
+          }
+          trap cleanup EXIT
+
+          # CI стартує на push у main, якого при створенні з шаблону немає —
+          # тому пінаємо його вручну.
+          sleep 10
+          gh workflow run ci.yml --repo "${ORG}/${name}" --ref main
+
+          for _ in $(seq 1 60); do
+            sleep 15
+            run="$(gh run list --repo "${ORG}/${name}" --limit 1 --json databaseId,status,conclusion --jq '.[0]')"
+            [ -n "$run" ] && [ "$run" != "null" ] || continue
+            status="$(printf '%s' "$run" | jq -r .status)"
+            echo "Статус: $status"
+            if [ "$status" = "completed" ]; then
+              conclusion="$(printf '%s' "$run" | jq -r .conclusion)"
+              echo "Висновок: $conclusion"
+              [ "$conclusion" = "success" ] || {
+                gh run view "$(printf '%s' "$run" | jq -r .databaseId)" --repo "${ORG}/${name}" --log-failed || true
+                exit 1
+              }
+              echo "Шаблон ${TEMPLATE}: CI пройшов без правок." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          done
+          echo "::error::CI не завершився за 15 хвилин."
+          exit 1

@@ -1,0 +1,21 @@
+name: Задача
+description: Робота з roadmap (розділ 13)
+labels: [task]
+body:
+  - type: input
+    id: doc
+    attributes:
+      label: Розділ документації
+      placeholder: 5.6, 12.6
+  - type: textarea
+    id: scope
+    attributes:
+      label: Що зробити
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Готово, коли
+    validations:
+      required: true

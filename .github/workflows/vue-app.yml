@@ -1,0 +1,147 @@
+name: Vue-застосунок
+
+# Спільний пайплайн для kite-web, kite-business, kite-ops, kite-box-screen (5.6).
+# Образ — зібрана статика в nginx.
+
+on:
+  workflow_call:
+    inputs:
+      app-name:
+        type: string
+        required: false
+        default: ''
+      node-version:
+        type: string
+        required: false
+        default: '22'
+      dockerfile:
+        type: string
+        required: false
+        default: Dockerfile
+      context:
+        type: string
+        required: false
+        default: .
+      publish:
+        type: boolean
+        required: false
+        default: true
+      type-check:
+        type: boolean
+        required: false
+        default: true
+      unit-tests:
+        type: boolean
+        required: false
+        default: true
+      bump-infra:
+        type: boolean
+        required: false
+        default: true
+      runs-on:
+        type: string
+        required: false
+        default: ubuntu-latest
+    secrets:
+      INFRA_BUMP_TOKEN:
+        required: false
+      NPM_READ_TOKEN:
+        description: Токен для читання @kite/ui з GitHub Packages
+        required: false
+    outputs:
+      image-tag:
+        value: ${{ jobs.image.outputs.tag }}
+
+env:
+  APP: ${{ inputs.app-name != '' && inputs.app-name || github.event.repository.name }}
+
+jobs:
+  verify:
+    name: Лінт, типи, тести, збірка
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Поставити pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          # Версія береться з поля packageManager у package.json.
+          run_install: false
+
+      - name: Поставити Node ${{ inputs.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: '@kite'
+
+      - name: Поставити залежності
+        env:
+          # @kite/ui живе в GitHub Packages (5.2); без власного токена
+          # вистачає вбудованого GITHUB_TOKEN у межах організації.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_READ_TOKEN != '' && secrets.NPM_READ_TOKEN || github.token }}
+        run: pnpm install --frozen-lockfile
+
+      - name: Лінт (ESLint)
+        run: pnpm run lint
+
+      - name: Типи (vue-tsc)
+        if: inputs.type-check
+        run: pnpm run type-check
+
+      - name: Юніт-тести (Vitest)
+        if: inputs.unit-tests
+        run: pnpm run test:unit --run
+
+      - name: Збірка
+        run: pnpm run build
+
+      - name: Зберегти dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ env.APP }}
+          path: dist
+          if-no-files-found: error
+          retention-days: 7
+
+  image:
+    name: Образ
+    needs: verify
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.build.outputs.primary-tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Зібрати і опублікувати образ
+        id: build
+        uses: kite-post/.github/actions/build-image@main
+        with:
+          image-name: ${{ env.APP }}
+          dockerfile: ${{ inputs.dockerfile }}
+          context: ${{ inputs.context }}
+          push: ${{ inputs.publish && github.event_name != 'pull_request' }}
+
+  bump:
+    name: Версія в kite-infra
+    needs: image
+    if: >-
+      inputs.bump-infra && inputs.publish
+      && github.event_name != 'pull_request'
+      && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+          || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+    steps:
+      - uses: kite-post/.github/actions/bump-infra-version@main
+        with:
+          service: ${{ inputs.app-name != '' && inputs.app-name || github.event.repository.name }}
+          tag: ${{ needs.image.outputs.tag }}
+          token: ${{ secrets.INFRA_BUMP_TOKEN }}

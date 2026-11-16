@@ -1,0 +1,155 @@
+name: Go-сервіс
+
+# Спільний пайплайн для 5 Go-сервісів Kite: scan, realtime, locker,
+# mock-pay, sms-gateway-emu (5.6).
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        type: string
+        required: false
+        default: ''
+      go-version:
+        description: Версія Go; типово береться з go.mod
+        type: string
+        required: false
+        default: ''
+      dockerfile:
+        type: string
+        required: false
+        default: Dockerfile
+      context:
+        type: string
+        required: false
+        default: .
+      publish:
+        type: boolean
+        required: false
+        default: true
+      integration-tests:
+        type: boolean
+        required: false
+        default: true
+      bump-infra:
+        type: boolean
+        required: false
+        default: true
+      runs-on:
+        type: string
+        required: false
+        default: ubuntu-latest
+    secrets:
+      INFRA_BUMP_TOKEN:
+        required: false
+    outputs:
+      image-tag:
+        value: ${{ jobs.image.outputs.tag }}
+
+env:
+  SERVICE: ${{ inputs.service-name != '' && inputs.service-name || github.event.repository.name }}
+
+jobs:
+  verify:
+    name: Лінт і тести
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Поставити Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version != '' && inputs.go-version || '' }}
+          go-version-file: ${{ inputs.go-version == '' && 'go.mod' || '' }}
+          cache: true
+
+      - name: Перевірити формат і go.mod
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l . | grep -v '^vendor/' || true)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::Не відформатовано (gofmt):"
+            printf '%s\n' "$unformatted"
+            exit 1
+          fi
+          go mod tidy
+          if ! git diff --quiet -- go.mod go.sum; then
+            echo "::error::go.mod / go.sum не узгоджені — зроби go mod tidy і закоміть."
+            git --no-pager diff -- go.mod go.sum
+            exit 1
+          fi
+
+      - name: Лінт (golangci-lint)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64.8
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Схеми kite-contracts
+        run: |
+          set -euo pipefail
+          if [ -f Makefile ] && grep -qE '^contracts-check:' Makefile; then
+            make contracts-check
+          else
+            echo "::notice::Цілі contracts-check немає — перевірку схем пропускаю."
+          fi
+
+      - name: Тести
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.integration-tests }}" = "true" ]; then
+            go test -race -covermode=atomic -coverprofile=coverage.out ./...
+          else
+            go test -race -short ./...
+          fi
+
+      - name: Зберегти покриття
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ env.SERVICE }}
+          path: coverage.out
+          if-no-files-found: ignore
+          retention-days: 7
+
+  image:
+    name: Образ
+    needs: verify
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.build.outputs.primary-tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Зібрати і опублікувати образ
+        id: build
+        uses: kite-post/.github/actions/build-image@main
+        with:
+          image-name: ${{ env.SERVICE }}
+          dockerfile: ${{ inputs.dockerfile }}
+          context: ${{ inputs.context }}
+          push: ${{ inputs.publish && github.event_name != 'pull_request' }}
+
+  bump:
+    name: Версія в kite-infra
+    needs: image
+    if: >-
+      inputs.bump-infra && inputs.publish
+      && github.event_name != 'pull_request'
+      && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+          || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+    steps:
+      - uses: kite-post/.github/actions/bump-infra-version@main
+        with:
+          service: ${{ inputs.service-name != '' && inputs.service-name || github.event.repository.name }}
+          tag: ${{ needs.image.outputs.tag }}
+          token: ${{ secrets.INFRA_BUMP_TOKEN }}

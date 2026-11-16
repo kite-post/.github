@@ -1,0 +1,107 @@
+name: Збірка і публікація образу
+description: >-
+  Збирає Docker-образ сервіса і публікує його в ghcr.io/<організація>/<сервіс>.
+  Теги: sha-<короткий хеш> для main, v<semver> для релізних тегів. Рухомий
+  latest не ставиться — compose у kite-infra використовує лише закріплені теги.
+
+inputs:
+  image-name:
+    description: Ім'я образу без реєстру й організації (зазвичай ім'я сервіса)
+    required: true
+  dockerfile:
+    description: Шлях до Dockerfile
+    required: false
+    default: Dockerfile
+  context:
+    description: Контекст збірки
+    required: false
+    default: .
+  push:
+    description: Публікувати образ у GHCR ("true" / "false")
+    required: false
+    default: 'true'
+  build-args:
+    description: Аргументи збірки, по одному на рядок
+    required: false
+    default: ''
+  platforms:
+    description: Платформи збірки
+    required: false
+    default: linux/amd64
+
+outputs:
+  image:
+    description: Повне ім'я образу без тега
+    value: ${{ steps.meta.outputs.images }}
+  tags:
+    description: Усі теги, які отримав образ
+    value: ${{ steps.meta.outputs.tags }}
+  primary-tag:
+    description: Основний тег для versions.env у kite-infra
+    value: ${{ steps.primary.outputs.tag }}
+  digest:
+    description: Digest опублікованого образу
+    value: ${{ steps.build.outputs.digest }}
+
+runs:
+  using: composite
+  steps:
+    - name: Налаштувати Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Увійти в GHCR
+      if: inputs.push == 'true'
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+
+    - name: Порахувати теги
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ghcr.io/${{ github.repository_owner }}/${{ inputs.image-name }}
+        flavor: |
+          latest=false
+        tags: |
+          type=sha,format=short,prefix=sha-
+          type=semver,pattern=v{{version}}
+          type=ref,event=pr,prefix=pr-
+        labels: |
+          org.opencontainers.image.title=${{ inputs.image-name }}
+          org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+    - name: Зібрати і опублікувати
+      id: build
+      uses: docker/build-push-action@v6
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.dockerfile }}
+        platforms: ${{ inputs.platforms }}
+        push: ${{ inputs.push == 'true' }}
+        load: ${{ inputs.push != 'true' }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        build-args: ${{ inputs.build-args }}
+        provenance: false
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Вибрати основний тег
+      id: primary
+      shell: bash
+      env:
+        TAGS: ${{ steps.meta.outputs.tags }}
+      run: |
+        set -euo pipefail
+        # Реліз важливіший за збірку з main: якщо є v<semver>, беремо його.
+        tag="$(printf '%s\n' "$TAGS" | sed 's#.*:##' | grep -E '^v[0-9]' | head -1 || true)"
+        if [ -z "$tag" ]; then
+          tag="$(printf '%s\n' "$TAGS" | sed 's#.*:##' | grep -E '^sha-' | head -1 || true)"
+        fi
+        if [ -z "$tag" ]; then
+          tag="$(printf '%s\n' "$TAGS" | sed 's#.*:##' | head -1)"
+        fi
+        echo "tag=$tag" >> "$GITHUB_OUTPUT"
+        echo "Основний тег: $tag"
