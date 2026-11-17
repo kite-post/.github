@@ -1,0 +1,162 @@
+name: Підняти kite-contracts
+
+# Версія kite-contracts одна на всі репозиторії (5.4, п. 6). Після релізу
+# kite-contracts розсилає подію kite-contracts-released, і кожен споживач цим
+# workflow відкриває собі PR з `make contracts V=<версія>`. Оновлення робить
+# тулчейн самого сервіса, тож go.sum, pnpm-lock.yaml і решта lock-файлів
+# узгоджуються так само, як руками.
+#
+# Викликається з репозиторію сервіса (шаблони вже мають цей файл):
+#
+#   on:
+#     repository_dispatch:
+#       types: [kite-contracts-released]
+#     workflow_dispatch:
+#       inputs:
+#         version: { description: 'Версія kite-contracts, напр. 0.2.0', required: true }
+#   jobs:
+#     bump:
+#       uses: kite-post/.github/.github/workflows/contracts-bump.yml@main
+#       with:
+#         kind: java
+#         version: ${{ github.event.client_payload.version || inputs.version }}
+#       permissions: { contents: write, pull-requests: write, packages: read }
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      kind:
+        description: java | go | python | vue
+        type: string
+        required: true
+      version:
+        description: Версія kite-contracts без префікса v
+        type: string
+        required: true
+      java-version:
+        type: string
+        required: false
+        default: '21'
+      python-version:
+        type: string
+        required: false
+        default: '3.15'
+      node-version:
+        type: string
+        required: false
+        default: '26'
+    secrets:
+      CONTRACTS_BUMP_TOKEN:
+        description: >-
+          Токен, від імені якого відкривається PR. PR від вбудованого
+          GITHUB_TOKEN не запускає CI, тож без цього токена перевірки на PR
+          доведеться перезапустити руками.
+        required: false
+      NPM_READ_TOKEN:
+        required: false
+
+jobs:
+  bump:
+    name: kite-contracts → v${{ inputs.version }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      packages: read
+    env:
+      VERSION: ${{ inputs.version }}
+      MAVEN_USERNAME: ${{ github.actor }}
+      MAVEN_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Перевірити версію
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::версія «$VERSION» має бути вигляду 1.2.3"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ secrets.CONTRACTS_BUMP_TOKEN != '' && secrets.CONTRACTS_BUMP_TOKEN || github.token }}
+
+      - name: Поставити JDK ${{ inputs.java-version }}
+        if: inputs.kind == 'java'
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+          cache: maven
+          server-id: github
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
+
+      - name: Поставити Go
+        if: inputs.kind == 'go'
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Поставити Python ${{ inputs.python-version }}
+        if: inputs.kind == 'python'
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Поставити pnpm
+        if: inputs.kind == 'vue'
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+
+      - name: Поставити Node ${{ inputs.node-version }}
+        if: inputs.kind == 'vue'
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          registry-url: https://npm.pkg.github.com
+          scope: '@kite'
+
+      - name: make contracts V=${{ inputs.version }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_READ_TOKEN != '' && secrets.NPM_READ_TOKEN || github.token }}
+        run: make contracts V="$VERSION"
+
+      - name: Перевірити підключення
+        run: |
+          set -euo pipefail
+          if grep -qE '^contracts-check:' Makefile; then
+            make contracts-check
+          fi
+
+      - name: Відкрити PR
+        env:
+          GH_TOKEN: ${{ secrets.CONTRACTS_BUMP_TOKEN != '' && secrets.CONTRACTS_BUMP_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "::notice::Сервіс уже на kite-contracts v$VERSION — PR не потрібен."
+            exit 0
+          fi
+
+          branch="contracts/v$VERSION"
+          git config user.name "kite-ci"
+          git config user.email "kite-ci@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add -A
+          git commit -q -m "Підняти kite-contracts до v$VERSION"
+          git push --force origin "$branch"
+
+          existing="$(gh pr list --head "$branch" --state open --json url --jq '.[0].url' || true)"
+          if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+            echo "PR уже відкритий: $existing"
+            exit 0
+          fi
+          url="$(gh pr create --head "$branch" \
+            --title "Підняти kite-contracts до v$VERSION" \
+            --body "Нова версія контрактів: https://github.com/${{ github.repository_owner }}/kite-contracts/tree/v$VERSION
+
+          Зміни в kite-contracts лише адитивні (8.3, п. 8), тож PR має пройти CI без правок коду. Якщо не проходить — це сигнал, що зміна контракту була несумісною.")"
+          echo "PR: $url" >> "$GITHUB_STEP_SUMMARY"

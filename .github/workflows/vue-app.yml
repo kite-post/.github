@@ -91,6 +91,15 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_READ_TOKEN != '' && secrets.NPM_READ_TOKEN || github.token }}
         run: pnpm install --frozen-lockfile
 
+      - name: Схеми kite-contracts
+        run: |
+          set -euo pipefail
+          if [ -f Makefile ] && grep -qE '^contracts-check:' Makefile; then
+            make contracts-check
+          else
+            echo "::notice::Цілі contracts-check немає — перевірку схем пропускаю."
+          fi
+
       - name: Лінт (ESLint)
         run: pnpm run lint
 
@@ -124,6 +133,20 @@ jobs:
       tag: ${{ steps.build.outputs.primary-tag }}
     steps:
       - uses: actions/checkout@v7
+
+      # Збірка в Dockerfile сама ставить @kite/ui і @kite/contracts із GitHub
+      # Packages. Токен їде секретом BuildKit у ~/.npmrc, тож не лишається ні в
+      # шарах образу, ні в його історії.
+      - name: Підготувати .npmrc для збірки
+        id: npmrc
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_READ_TOKEN != '' && secrets.NPM_READ_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          file="$RUNNER_TEMP/npmrc"
+          printf '//npm.pkg.github.com/:_authToken=%s\n' "$NODE_AUTH_TOKEN" > "$file"
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+
       - name: Зібрати і опублікувати образ
         id: build
         uses: kite-post/.github/actions/build-image@main
@@ -132,6 +155,8 @@ jobs:
           dockerfile: ${{ inputs.dockerfile }}
           context: ${{ inputs.context }}
           push: ${{ inputs.publish && github.event_name != 'pull_request' }}
+          secret-files: |
+            npmrc=${{ steps.npmrc.outputs.file }}
 
   bump:
     name: Версія в kite-infra

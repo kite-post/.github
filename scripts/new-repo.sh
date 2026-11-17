@@ -43,8 +43,11 @@ if [ -f scripts/rename.sh ]; then
 fi
 
 # Образ публікується сюди, тож нехай це буде видно одразу в описі репозиторію.
+# Топік kite-contracts — адреса розсилки: після релізу контрактів kite-contracts
+# шле подію всім репозиторіям із ним, і contracts-bump відкриває PR з новою версією.
 gh repo edit "$ORG/$name" \
   --description "Kite · $name · образ ghcr.io/$ORG/$name" \
+  --add-topic kite-contracts \
   --enable-issues --enable-projects=false --enable-wiki=false \
   --delete-branch-on-merge >/dev/null
 
