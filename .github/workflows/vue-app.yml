@@ -134,7 +134,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Збірка в Dockerfile сама ставить @kite/ui і @kite/contracts із GitHub
+      # Збірка в Dockerfile сама ставить @kite/ui і @kite-post/contracts із GitHub
       # Packages. Токен їде секретом BuildKit у ~/.npmrc, тож не лишається ні в
       # шарах образу, ні в його історії.
       - name: Підготувати .npmrc для збірки

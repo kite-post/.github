@@ -117,7 +117,7 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
           registry-url: https://npm.pkg.github.com
-          scope: '@kite'
+          scope: '@kite-post'
 
       - name: make contracts V=${{ inputs.version }}
         env:
