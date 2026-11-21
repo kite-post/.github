@@ -97,6 +97,16 @@ https://github.com/orgs/kite-post/packages/container/<сервіс>/settings
 і поставити Public. Інакше образи йдуть у 500 МБ приватного сховища плану Free,
 а цього вистачає приблизно на два Java-образи.
 
+Те саме стосується пакетів `kite-contracts` (Maven `ua.kite.kite-contracts` і npm
+`@kite-post/contracts`). Пакети публікує `kite-contracts`, а читає їх
+`GITHUB_TOKEN` інших репозиторіїв. Приватний пакет цей токен не прочитає: збірка
+впаде з 403 на `npm.pkg.github.com`. Тому після першої публікації нового пакета
+його теж треба один раз зробити Public:
+
+```
+https://github.com/orgs/kite-post/packages/npm/package/contracts/settings
+```
+
 ## Теги образів
 
 Кожна збірка з `main` → `sha-<короткий хеш>`; реліз за тегом `v1.2.3` → `v1.2.3`.
