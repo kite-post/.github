@@ -51,7 +51,7 @@ on:
       INFRA_BUMP_TOKEN:
         required: false
       NPM_READ_TOKEN:
-        description: Токен для читання @kite/ui з GitHub Packages
+        description: Токен для читання @kite-post/ui і @kite-post/contracts з GitHub Packages
         required: false
     outputs:
       image-tag:
@@ -82,12 +82,13 @@ jobs:
           node-version: ${{ inputs.node-version }}
           cache: pnpm
           registry-url: https://npm.pkg.github.com
-          scope: '@kite'
+          scope: '@kite-post'
 
       - name: Поставити залежності
         env:
-          # @kite/ui живе в GitHub Packages (5.2); без власного токена
-          # вистачає вбудованого GITHUB_TOKEN у межах організації.
+          # @kite-post/ui (5.2) і @kite-post/contracts живуть у GitHub
+          # Packages; без власного токена вистачає вбудованого GITHUB_TOKEN
+          # у межах організації.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_READ_TOKEN != '' && secrets.NPM_READ_TOKEN || github.token }}
         run: pnpm install --frozen-lockfile
 
@@ -134,8 +135,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Збірка в Dockerfile сама ставить @kite/ui і @kite-post/contracts із GitHub
-      # Packages. Токен їде секретом BuildKit у ~/.npmrc, тож не лишається ні в
+      # Збірка в Dockerfile сама ставить @kite-post/ui і @kite-post/contracts із
+      # GitHub Packages. Токен їде секретом BuildKit у ~/.npmrc, тож не лишається ні в
       # шарах образу, ні в його історії.
       - name: Підготувати .npmrc для збірки
         id: npmrc
