@@ -177,6 +177,11 @@ jobs:
   bump:
     name: Версія в kite-infra
     needs: image
+    # Гілка bump/<сервіс> одна: два прогони підряд не мають штовхати її одночасно.
+    # Чекаємо попередній, а не скасовуємо — останній тег однаково переможе.
+    concurrency:
+      group: bump-infra-${{ inputs.service-name != '' && inputs.service-name || github.event.repository.name }}
+      cancel-in-progress: false
     if: >-
       inputs.bump-infra && inputs.publish
       && github.event_name != 'pull_request'

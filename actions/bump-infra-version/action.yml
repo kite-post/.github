@@ -2,7 +2,10 @@ name: Підняти версію в kite-infra
 description: >-
   Після публікації образу відкриває в репозиторії kite-infra pull request, який
   піднімає рядок сервіса у versions.env. Мердж цього PR і є «деплоєм» на стенд
-  (12.6). Без токена з правом на запис у kite-infra крок тихо пропускається.
+  (12.6). Рядок міняє scripts/bump.sh самого kite-infra — той самий, що й
+  `make bump`. На сервіс один відкритий PR (гілка bump/<сервіс>): новий тег
+  оновлює його, а не відкриває ще один. Без токена з правом на запис у
+  kite-infra крок тихо пропускається.
 
 inputs:
   service:
@@ -32,7 +35,7 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Відкрити PR з новою версією
+    - name: Відкрити або оновити PR з новою версією
       id: bump
       shell: bash
       env:
@@ -43,6 +46,8 @@ runs:
         TAG: ${{ inputs.tag }}
         SOURCE_REPO: ${{ github.repository }}
         SOURCE_SHA: ${{ github.sha }}
+        SERVER_URL: ${{ github.server_url }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
         set -euo pipefail
 
@@ -52,9 +57,7 @@ runs:
           exit 0
         fi
 
-        # Ключ у versions.env: shipment-service -> SHIPMENT_SERVICE_TAG
-        key="$(printf '%s' "$SERVICE" | tr '[:lower:]-' '[:upper:]_')_TAG"
-        branch="bump/${SERVICE}-${TAG}"
+        branch="bump/${SERVICE}"
         work="$(mktemp -d)"
 
         git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${INFRA_REPO}.git" "$work"
@@ -62,49 +65,58 @@ runs:
         git config user.name "kite-ci"
         git config user.email "kite-ci@users.noreply.github.com"
 
-        if [ ! -f "$VERSIONS_FILE" ]; then
-          echo "::error::У ${INFRA_REPO} немає файлу ${VERSIONS_FILE}."
+        if [ ! -x scripts/bump.sh ]; then
+          echo "::error::У ${INFRA_REPO} немає scripts/bump.sh — нема чим піднімати версію."
           exit 1
         fi
 
+        # Ключ лише для тексту PR; сам рядок міняє bump.sh (тег, ключ, відмови — там).
+        key="$(printf '%s' "$SERVICE" | tr '[:lower:]-' '[:upper:]_')_TAG"
         current="$(grep -E "^${key}=" "$VERSIONS_FILE" | head -1 | cut -d= -f2- || true)"
-        if [ "$current" = "$TAG" ]; then
-          echo "::notice::${key} вже дорівнює ${TAG} — PR не потрібен."
-          exit 0
-        fi
 
-        if [ -n "$current" ]; then
-          # Заміна наявного рядка; значення теж екранується, бо йде в заміну sed.
-          esc_tag="$(printf '%s' "$TAG" | sed -e 's/[&/\]/\\&/g')"
-          sed -i.bak -E "s|^${key}=.*|${key}=${esc_tag}|" "$VERSIONS_FILE"
-          rm -f "${VERSIONS_FILE}.bak"
-        else
-          printf '%s=%s\n' "$key" "$TAG" >> "$VERSIONS_FILE"
+        if ! out="$(CI=true VERSIONS_FILE="$VERSIONS_FILE" scripts/bump.sh "$SERVICE" "$TAG" 2>&1)"; then
+          echo "::error::scripts/bump.sh відмовив: $out"
+          exit 1
+        fi
+        echo "$out"
+
+        existing="$(gh pr list --repo "$INFRA_REPO" --head "$branch" \
+          --state open --json url --jq '.[0].url // empty')"
+
+        if git diff --quiet -- "$VERSIONS_FILE"; then
+          echo "::notice::${key} у main вже дорівнює ${TAG} — PR не потрібен."
+          # Відкритий PR зі старішим тегом після цього лише відкотив би версію.
+          if [ -n "$existing" ]; then
+            gh pr close "$existing" --delete-branch \
+              --comment "У main уже \`${TAG}\` — цей PR застарів."
+            echo "Закрито застарілий PR: $existing" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit 0
         fi
 
         git checkout -B "$branch"
         git add "$VERSIONS_FILE"
         git commit -m "Підняти ${SERVICE} до ${TAG}" \
           -m "Джерело: ${SOURCE_REPO}@${SOURCE_SHA}"
+        # Гілка одна на сервіс: кожен новий тег переписує її поверх свіжого main.
         git push --force origin "$branch"
 
-        existing="$(gh pr list --repo "$INFRA_REPO" --head "$branch" \
-          --state open --json url --jq '.[0].url' || true)"
+        owner="${INFRA_REPO%%/*}"
+        title="Підняти ${SERVICE} до ${TAG}"
+        image_url="${SERVER_URL}/orgs/${owner}/packages/container/package/${SERVICE}"
+        commit_url="${SERVER_URL}/${SOURCE_REPO}/commit/${SOURCE_SHA}"
+        body="$(printf '%s\n\n%s\n\n%s\n' \
+          "Образ [\`ghcr.io/${owner}/${SERVICE}:${TAG}\`](${image_url}) опубліковано з [${SOURCE_REPO}@${SOURCE_SHA:0:7}](${commit_url}) ([прогін](${RUN_URL}))." \
+          "\`${key}\`: \`${current:-—}\` → \`${TAG}\`" \
+          "Мердж цього PR = деплой сервіса на стенд. Наступна публікація ${SERVICE} оновить цей PR, а не відкриє новий. Руками те саме: \`make bump SERVICE=${SERVICE} TAG=${TAG}\`.")"
 
-        if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+        if [ -n "$existing" ]; then
+          gh pr edit "$existing" --repo "$INFRA_REPO" --title "$title" --body "$body"
           url="$existing"
-          echo "PR уже відкритий: $url"
+          echo "PR оновлено: $url"
         else
-          owner="${INFRA_REPO%%/*}"
-          body="$(
-            printf '%s\n\n%s\n' \
-              "Образ \`ghcr.io/${owner}/${SERVICE}:${TAG}\` опубліковано з ${SOURCE_REPO}@${SOURCE_SHA}." \
-              "Мердж цього PR = деплой сервіса на стенд. Було: \`${current:-—}\`, стає: \`${TAG}\`."
-          )"
           url="$(gh pr create --repo "$INFRA_REPO" \
-            --head "$branch" \
-            --title "Підняти ${SERVICE} до ${TAG}" \
-            --body "$body")"
+            --head "$branch" --title "$title" --body "$body")"
           echo "PR створено: $url"
         fi
 

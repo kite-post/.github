@@ -137,12 +137,26 @@ https://github.com/orgs/kite-post/packages/npm/package/contracts/settings
 
 | Секрет                 | Потрібен для                                             | Без нього                        |
 | ---------------------- | -------------------------------------------------------- | -------------------------------- |
-| `INFRA_BUMP_TOKEN`     | PR з новою версією в `kite-infra`                        | Крок тихо пропускається          |
+| `INFRA_BUMP_TOKEN`     | PR з новою версією в `kite-infra` (нижче)                | Крок тихо пропускається          |
 | `NPM_READ_TOKEN`       | Читання `@kite/ui` з GitHub Packages поза організацією   | Беруть вбудований `GITHUB_TOKEN` |
 | `TEMPLATE_SMOKE_TOKEN` | Дим-тест шаблонів (створює і видаляє тимчасове репо)     | Дим-тест недоступний             |
 
 Образи й пакети публікуються вбудованим `GITHUB_TOKEN` — окремий секрет для
 GHCR не потрібен.
+
+**`INFRA_BUMP_TOKEN`** — fine-grained PAT: власник `kite-post`, доступ лише до
+`kite-infra`, права Contents і Pull requests — Read and write. Вбудований
+`GITHUB_TOKEN` не підходить: він не пише в чужий репозиторій, а PR від нього
+не запускає CI. Після створення:
+
+```bash
+gh secret set INFRA_BUMP_TOKEN --org kite-post --visibility all
+```
+
+Дія `bump-infra-version` клонує `kite-infra`, міняє рядок його ж
+`scripts/bump.sh` (тим самим, що й `make bump`) і тримає один відкритий PR на
+сервіс у гілці `bump/<сервіс>`: нова публікація оновлює PR, а якщо `main` уже
+має цей тег, застарілий PR закривається.
 
 ## Шаблони репозиторіїв
 
