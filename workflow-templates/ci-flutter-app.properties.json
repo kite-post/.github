@@ -1,0 +1,7 @@
+{
+  "name": "Kite · Flutter-застосунок",
+  "description": "flutter analyze, flutter test, збірка APK; на тегі v<semver> — APK та IPA в релізі.",
+  "iconName": "example-icon",
+  "categories": ["Dart"],
+  "filePatterns": ["pubspec\\.yaml$"]
+}

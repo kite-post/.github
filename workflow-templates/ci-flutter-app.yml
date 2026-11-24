@@ -1,0 +1,14 @@
+name: ci
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+jobs:
+  ci:
+    uses: kite-post/.github/.github/workflows/flutter-app.yml@main
+    permissions:
+      # write — щоб на тегі v<semver> покласти APK та IPA в реліз.
+      contents: write
+    secrets: inherit

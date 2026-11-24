@@ -58,7 +58,8 @@ jobs:
 ```
 
 Більше нічого в репозиторії сервіса про CI не знає. Для Go, Python і Vue —
-те саме з `go-service.yml`, `python-service.yml`, `vue-app.yml`.
+те саме з `go-service.yml`, `python-service.yml`, `vue-app.yml`. Для Flutter —
+`flutter-app.yml` з `contents: write` (див. нижче).
 
 > `@main` ставимо на час бутстрапу. Коли каркас усталиться, краще закріпитися
 > за тегом: `git tag -f v1 && git push -f origin v1`, і далі `…@v1`.
@@ -83,6 +84,25 @@ Maven-пакет `ua.kite:kite-contracts` лежить у GitHub Packages, а в
 Maven лише з токеном. Окремого секрета для цього не треба: `java-service.yml`
 сам розставляє `settings.xml` із вбудованим `GITHUB_TOKEN` — і для тестів, і
 для збірки образу, куди токен їде секретом BuildKit, а не аргументом збірки.
+
+### Flutter (`flutter-app.yml`)
+
+Для `kite-mobile`. Образу немає — застосунок їде у реліз GitHub (5.6):
+
+| Подія             | Що відбувається                                                                    |
+| ----------------- | ---------------------------------------------------------------------------------- |
+| PR, `main`        | `pub get`, `contracts-check` (якщо є), `dart format`, `flutter analyze`, `flutter test`, release-APK як артефакт прогону |
+| тег `v<semver>`   | те саме з `--build-name=<semver> --build-number=<номер прогону>`, IPA на macOS-раннері, реліз з APK та IPA |
+
+У `ci.yml` потрібне `contents: write` — інакше реліз не створиться (шаблон
+`ci-flutter-app.yml` уже з ним). Тег не за semver (`v1.2`, `vnext`) валить
+прогін одразу. Тег із суфіксом (`v1.2.0-rc.1`) стає pre-release.
+
+Підписів немає: APK підписаний debug-ключем із шаблону Flutter, IPA зібраний
+з `--no-codesign` і на пристрій стане лише після перепідпису власним
+профілем. Власні входи: `flutter-version` (порожньо — свіжий stable),
+`java-version` (`21`), `format-check` (`true`), `ipa` (`true`),
+`macos-runs-on` (`macos-latest`).
 
 ## Видимість образів
 

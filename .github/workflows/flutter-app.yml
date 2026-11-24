@@ -1,0 +1,251 @@
+name: Flutter-застосунок
+
+# Спільний пайплайн для kite-mobile (5.2, 5.6). Образу немає: застосунок
+# публікується як APK та IPA у релізі GitHub на тегі v<semver> (12.6).
+
+on:
+  workflow_call:
+    inputs:
+      app-name:
+        description: Ім'я файлів APK/IPA; за замовчуванням — ім'я репозиторію
+        type: string
+        required: false
+        default: ''
+      flutter-version:
+        description: Версія Flutter; порожньо — найсвіжіша з каналу stable
+        type: string
+        required: false
+        default: ''
+      java-version:
+        description: JDK для Gradle-збірки APK
+        type: string
+        required: false
+        default: '21'
+      format-check:
+        description: Перевіряти dart format
+        type: boolean
+        required: false
+        default: true
+      ipa:
+        description: Збирати IPA на тегі (macOS-раннер)
+        type: boolean
+        required: false
+        default: true
+      runs-on:
+        type: string
+        required: false
+        default: ubuntu-latest
+      macos-runs-on:
+        type: string
+        required: false
+        default: macos-latest
+
+env:
+  APP: ${{ inputs.app-name != '' && inputs.app-name || github.event.repository.name }}
+  IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
+
+jobs:
+  version:
+    name: Версія
+    runs-on: ${{ inputs.runs-on }}
+    permissions: {}
+    outputs:
+      release: ${{ steps.v.outputs.release }}
+      build-args: ${{ steps.v.outputs.build-args }}
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - name: Версія з тегу
+        id: v
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          if [ "$IS_RELEASE" != "true" ]; then
+            # Поза тегом версія береться з pubspec.yaml як є.
+            { echo "release=false"; echo "build-args="; echo "version="; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+          if ! [[ "$REF_NAME" =~ $semver ]]; then
+            echo "::error::Тег $REF_NAME — не v<semver> (наприклад v1.2.3)."
+            exit 1
+          fi
+          # build-name без «+метаданих» (Flutter бере номер збірки окремо);
+          # номер збірки — номер прогону, тож versionCode/CFBundleVersion лише ростуть.
+          version="${REF_NAME#v}"
+          name="${version%%+*}"
+          {
+            echo "release=true"
+            echo "version=$version"
+            echo "build-args=--build-name=$name --build-number=$RUN_NUMBER"
+          } >> "$GITHUB_OUTPUT"
+
+  verify:
+    name: Аналіз, тести, APK
+    needs: version
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Поставити JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+
+      - name: Поставити Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ inputs.flutter-version }}
+          cache: true
+
+      - name: Поставити залежності
+        run: |
+          set -euo pipefail
+          flutter --version
+          if [ -f pubspec.lock ]; then
+            flutter pub get --enforce-lockfile
+          else
+            flutter pub get
+          fi
+
+      - name: Схеми kite-contracts
+        run: |
+          set -euo pipefail
+          if [ -f Makefile ] && grep -qE '^contracts-check:' Makefile; then
+            make contracts-check
+          else
+            echo "::notice::Цілі contracts-check немає — перевірку схем пропускаю."
+          fi
+
+      - name: Форматування (dart format)
+        if: inputs.format-check
+        run: dart format --output=none --set-exit-if-changed lib test
+
+      - name: Аналіз (flutter analyze)
+        run: flutter analyze
+
+      - name: Тести (flutter test)
+        run: |
+          set -euo pipefail
+          if [ -d test ]; then
+            flutter test
+          else
+            echo "::notice::Каталогу test немає — тести пропускаю."
+          fi
+
+      # Release-збірка навіть на PR: так R8 і ресурси перевіряються до тегу.
+      # Без власного keystore APK підписується debug-ключем із шаблону Flutter.
+      - name: Збірка APK
+        env:
+          BUILD_ARGS: ${{ needs.version.outputs.build-args }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086  # BUILD_ARGS — кілька аргументів
+          flutter build apk --release $BUILD_ARGS
+          mkdir -p dist
+          suffix="${VERSION:-sha-${GITHUB_SHA::7}}"
+          cp build/app/outputs/flutter-apk/app-release.apk "dist/${APP}-${suffix}.apk"
+          ls -l dist
+
+      - name: Зберегти APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: apk-${{ env.APP }}
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  ipa:
+    name: IPA
+    needs: [version, verify]
+    if: inputs.ipa && needs.version.outputs.release == 'true'
+    runs-on: ${{ inputs.macos-runs-on }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Поставити Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ inputs.flutter-version }}
+          cache: true
+
+      - name: Поставити залежності
+        run: |
+          set -euo pipefail
+          if [ -f pubspec.lock ]; then
+            flutter pub get --enforce-lockfile
+          else
+            flutter pub get
+          fi
+
+      # Сертифікатів Apple в організації немає, тож IPA непідписаний: Runner.app
+      # у Payload/, запакований zip-ом. На пристрій він стане лише після
+      # перепідпису власним профілем (fastlane resign, Xcode); на симулятор —
+      # ніяк, для нього є `make ios-build` у репозиторії.
+      - name: Збірка IPA (без підпису)
+        env:
+          BUILD_ARGS: ${{ needs.version.outputs.build-args }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086
+          flutter build ios --release --no-codesign $BUILD_ARGS
+          work="$RUNNER_TEMP/ipa"
+          mkdir -p "$work/Payload" dist
+          cp -R build/ios/iphoneos/Runner.app "$work/Payload/"
+          (cd "$work" && zip -qry "$GITHUB_WORKSPACE/dist/${APP}-${VERSION}.ipa" Payload)
+          ls -l dist
+
+      - name: Зберегти IPA
+        uses: actions/upload-artifact@v7
+        with:
+          name: ipa-${{ env.APP }}
+          path: dist/*.ipa
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Реліз
+    needs: [version, verify, ipa]
+    # ipa пропускається, коли inputs.ipa = false; реліз тоді — лише з APK.
+    if: >-
+      always()
+      && needs.version.outputs.release == 'true'
+      && needs.verify.result == 'success'
+      && (needs.ipa.result == 'success' || needs.ipa.result == 'skipped')
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: write
+    steps:
+      - name: Забрати збірки
+        uses: actions/download-artifact@v8
+        with:
+          pattern: '*-${{ env.APP }}'
+          path: dist
+          merge-multiple: true
+
+      - name: Опублікувати реліз
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ls -l dist
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # Повторний прогін того самого тегу замінює файли, а не падає.
+            gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            prerelease=()
+            [[ "$TAG" == *-* ]] && prerelease=(--prerelease)
+            gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --generate-notes --title "$TAG" "${prerelease[@]}"
+          fi
